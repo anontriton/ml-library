@@ -1,0 +1,9 @@
+.venv/
+*.mat
+a.out
+main
+__pycache__/
+*.o
+*.swp
+
+data/
