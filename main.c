@@ -4,6 +4,10 @@
 #include "arena.c"
 #include "prng.c"
 
+#define MNIST_IMG_SIDE 28 /* each digit is a 28 x 28 pixel grayscale image */
+#define MNIST_IMG_SIZE (MNIST_IMG_SIDE * MNIST_IMG_SIDE) /* 784, one row per image */
+#define MNIST_NUM_CLASSES 10 /* digits 0-9, the width of a one-hot label row */
+
 /* math layer */
 typedef struct {
   u32 rows, cols;
@@ -36,15 +40,122 @@ b32 mat_cross_entropy(matrix *out, const matrix *p, const matrix *q);
 b32 mat_relu_add_grad(matrix *out, const matrix *in, const matrix* grad);
 b32 mat_softmax_add_grad(matrix *out, const matrix *softmax_out, 
                          const matrix* grad);
-b32 mat_cross_entropy_add_grad(matrix *out, const matrix *p, const matrix *q);
+b32 mat_cross_entropy_add_grad(matrix* p_grad, matrix* q_grad, 
+                               const matrix* p, const matrix* q,
+                               const matrix* grad) ;
+
+void draw_mnist_digit(f32* data);
 
 int main(void) {
   /* create permanent arena */
   mem_arena *perm_arena = arena_create(GiB(1), MiB(1));
+  if (perm_arena == NULL) {
+    fprintf(stderr, "failed to create arena\n");
+    return 1;
+  }
+
+  /* mat_load returns NULL if a file is missing or has a bad header
+   * early returns skip arena_destroy, the OS frees it when the process exits
+   */
+  matrix* train_images = mat_load(perm_arena, "train_images.mat");
+  if (train_images == NULL) {
+    fprintf(stderr, "failed to load train_images.mat (run mnist.py?)\n");
+    return 1;
+  }
+  matrix* test_images = mat_load(perm_arena, "test_images.mat");
+  if (test_images == NULL) {
+    fprintf(stderr, "failed to load test_images.mat (run mnist.py?)\n");
+    return 1;
+  }
+
+  matrix* train_labels_file = mat_load(perm_arena, "train_labels.mat");
+  if (train_labels_file == NULL) {
+    fprintf(stderr, "failed to load train_labels.mat (run mnist.py?)\n");
+    return 1;
+  }
+  matrix* test_labels_file = mat_load(perm_arena, "test_labels.mat");
+  if (test_labels_file == NULL) {
+    fprintf(stderr, "failed to load test_labels.mat (run mnist.py?)\n");
+    return 1;
+  }
+
+  /* shape checks, everything below indexes by these shapes so a mismatched or
+   * truncated file would read/write out of bounds instead of failing here
+   * images: one 784-pixel row per sample, labels: one digit per sample
+   */
+  if (train_images->cols != MNIST_IMG_SIZE ||
+      test_images->cols != MNIST_IMG_SIZE) {
+    fprintf(stderr, "image files must have %u cols\n", MNIST_IMG_SIZE);
+    return 1;
+  }
+  if (train_labels_file->cols != 1 || test_labels_file->cols != 1) {
+    fprintf(stderr, "label files must have 1 col\n");
+    return 1;
+  }
+  if (train_images->rows != train_labels_file->rows) {
+    fprintf(stderr, "train set has %u images but %u labels\n",
+            train_images->rows, train_labels_file->rows);
+    return 1;
+  }
+  if (test_images->rows != test_labels_file->rows) {
+    fprintf(stderr, "test set has %u images but %u labels\n",
+            test_images->rows, test_labels_file->rows);
+    return 1;
+  }
+
+  matrix* train_labels = mat_create(perm_arena, train_labels_file->rows,
+                                    MNIST_NUM_CLASSES);
+  matrix* test_labels = mat_create(perm_arena, test_labels_file->rows, 
+                                   MNIST_NUM_CLASSES);
+
+  /* the label is used as an index into the one-hot row, so a bad value would
+   * write into the next sample's row or past the end of the array
+   * checked as a float first since converting a negative float to u32 is
+   * undefined behavior in C
+   */
+  for (u32 i = 0; i < train_labels_file->rows; i++) {
+    f32 val = train_labels_file->data[i];
+    if (val < 0.0f || val >= MNIST_NUM_CLASSES) {
+      fprintf(stderr, "train label %u is %f, expected 0-9\n", i, val);
+      return 1;
+    }
+    u32 num = val;
+    train_labels->data[i * MNIST_NUM_CLASSES + num] = 1.0f;
+  }
+
+  for (u32 i = 0; i < test_labels_file->rows; i++) {
+    f32 val = test_labels_file->data[i];
+    if (val < 0.0f || val >= MNIST_NUM_CLASSES) {
+      fprintf(stderr, "test label %u is %f, expected 0-9\n", i, val);
+      return 1;
+    }
+    u32 num = val;
+    test_labels->data[i * MNIST_NUM_CLASSES + num] = 1.0f;
+  }
+
+  draw_mnist_digit(test_images->data);
+  for (u32 i = 0; i < MNIST_NUM_CLASSES; i++) {
+      printf("%.0f ", test_labels->data[i]);
+  }
+  printf("\n\n");
 
   arena_destroy(perm_arena);
 
   return 0;
+}
+
+void draw_mnist_digit(f32* data) {
+  for (u32 y = 0; y < MNIST_IMG_SIDE; y++) {
+    for (u32 x = 0; x < MNIST_IMG_SIDE; x++) {
+      f32 num = data[x + y * MNIST_IMG_SIDE];
+      /* 256-color grayscale ramp is codes 232-255 (24 shades), so scale the
+       * 0-1 pixel by 23 to land on 232-255, 24 would make white = 256 */
+      u32 col = 232 + (u32)(num * 23);
+      printf("\x1b[48;5;%um  ", col);
+    }
+    printf("\n");
+  }
+  printf("\x1b[0m");
 }
 
 matrix *mat_load(mem_arena *arena, const char *path) {
@@ -200,7 +311,7 @@ void _mat_mul_nn(matrix *out, const matrix *a, const matrix *b) {
   for (u64 i = 0; i < out->rows; i++) {
     for (u64 k = 0; k < a->cols; k++) {
       for (u64 j = 0; j < out->cols; j++) {
-        out->data[i + j * out->cols] +=
+        out->data[j + i * out->cols] +=
           a->data[k + i * a->cols] *
           b->data[j + k * b->cols];
       }
@@ -235,7 +346,7 @@ void _mat_mul_tn(matrix *out, const matrix *a, const matrix *b) {
 void _mat_mul_tt(matrix *out, const matrix *a, const matrix *b) {
   for (u64 i = 0; i < out->rows; i++) {
     for (u64 j = 0; j < out->cols; j++) {
-      for (u64 k = 0; k < a->cols; k++) {
+      for (u64 k = 0; k < a->rows; k++) {
         out->data[j + i * out->cols] +=
           a->data[i + k * a->cols] *
           b->data[k + j * b->cols];
@@ -248,8 +359,8 @@ b32 mat_mul(matrix *out, const matrix *a, const matrix *b, b8 zero_out,
             b8 transpose_a, b8 transpose_b) {
   u32 a_rows = transpose_a ? a->cols : a->rows;
   u32 a_cols = transpose_a ? a->rows : a->cols;
-  u32 b_rows = transpose_a ? b->cols : b->rows;
-  u32 b_cols = transpose_a ? b->rows : b->cols;
+  u32 b_rows = transpose_b ? b->cols : b->rows;
+  u32 b_cols = transpose_b ? b->rows : b->cols;
 
   if (a_cols != b_rows) { return false; }
   if (out->rows != a_rows || out->cols != b_cols) { return false; }
@@ -313,7 +424,7 @@ b32 mat_cross_entropy(matrix *out, const matrix *p, const matrix *q) {
 
   /* p * -log(q) */
   u64 size = (u64)out->rows * out->cols;
-  for (u64 i = 0; 0< size; i++) {
+  for (u64 i = 0; i < size; i++) {
     out->data[i] = p->data[i] == 0.0f ? 
       0.0f : p->data[i] * -logf(q->data[i]);
   }
@@ -327,11 +438,11 @@ b32 mat_relu_add_grad(matrix *out, const matrix *in, const matrix* grad) {
   }
   if (out->rows != grad->rows || out->cols != grad->cols) {
     return false;
+  }
 
-    u64 size = (u64)out->rows * out->cols;
-    for (u64 i = 0; i < size; i++) {
-      out->data[i] += in->data[i] > 0.0f ? grad->data[i] : 0.0f;
-    }
+  u64 size = (u64)out->rows * out->cols;
+  for (u64 i = 0; i < size; i++) {
+    out->data[i] += in->data[i] > 0.0f ? grad->data[i] : 0.0f;
   }
 
   return true;
@@ -343,7 +454,7 @@ b32 mat_softmax_add_grad(matrix *out, const matrix *softmax_out,
     return false;
   }
 
-  mem_arena_temp scratch = mem_scratch_get(NULL, 0);
+  mem_arena_temp scratch = arena_scratch_get(NULL, 0);
 
   u32 size = MAX(softmax_out->rows, softmax_out->cols);
   matrix* jacobian = mat_create(scratch.arena, size, size);
@@ -362,9 +473,9 @@ b32 mat_softmax_add_grad(matrix *out, const matrix *softmax_out,
   return true;
 }
 
-b32 mat_cross_entropy_add_grad(
-  const matrix* p_grad, const matrix* q_grad, 
-  const matrix* p, const matrix* q, const matrix* grad
+b32 mat_cross_entropy_add_grad(matrix* p_grad, matrix* q_grad, 
+                               const matrix* p, const matrix* q, 
+                               const matrix* grad
 ) {
   if (p->rows != q->rows || p->cols != q->cols) { return false; }
 
@@ -376,7 +487,7 @@ b32 mat_cross_entropy_add_grad(
     }
 
     for (u64 i = 0; i < size; i++) {
-      p_grad->data[i] += logf(q->data[i]) * grad->data[i];
+      p_grad->data[i] += -logf(q->data[i]) * grad->data[i];
     }
   }
 

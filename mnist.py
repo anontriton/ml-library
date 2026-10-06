@@ -3,7 +3,7 @@ import tensorflow_datasets as tfds
 import numpy as np
 
 def save_mat(path, arr):
-    arr = np.as_array(arr, dtype="<f4") # 4-byte float = 32-bit floats
+    arr = np.asarray(arr, dtype="<f4") # 4-byte float = 32-bit floats
     rows, cols = arr.shape
 
     with open(path, "wb") as f:
@@ -34,10 +34,16 @@ test_images = test_images.astype(np.float32) / 255.0
 train_labels = train_labels.astype(np.float32)
 test_labels = test_labels.astype(np.float32)
 
-train_images.tofile("train_images.mat")
-train_labels.tofile("train_labels.mat")
-test_images.tofile("test_images.mat")
-test_labels.tofile("test_labels.mat")
+# save_mat needs 2D arrays: images (N, 28, 28, 1) -> (N, 784), labels (N,) -> (N, 1)
+train_images = train_images.reshape(len(train_images), -1)
+test_images = test_images.reshape(len(test_images), -1)
+train_labels = train_labels.reshape(-1, 1)
+test_labels = test_labels.reshape(-1, 1)
+
+save_mat("train_images.mat", train_images)
+save_mat("train_labels.mat", train_labels)
+save_mat("test_images.mat", test_images)
+save_mat("test_labels.mat", test_labels)
 
 print(train_images.shape)
 print(train_labels.shape)

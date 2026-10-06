@@ -141,7 +141,7 @@ b32 plat_mem_release(void *ptr, u64 size) {
   return VirtualFree(ptr, size, MEM_RELEASE);
 }
 
-#elif defined(__linux__)
+#elif defined(__linux__) || defined(__APPLE__)
 
 #ifndef _DEFAULT_SOURCE
 #define _DEFAULT_SOURCE
