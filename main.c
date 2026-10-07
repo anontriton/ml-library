@@ -38,6 +38,7 @@ matrix *mat_create(mem_arena *arena, u32 rows, u32 cols);
 b32 mat_copy(matrix *dst, matrix *src);
 void mat_clear(matrix *mat);
 void mat_fill(matrix *mat, f32 x);
+void mat_fill_rand(matrix* mat, f32 lower, f32 upper);
 void mat_scale(matrix *mat, f32 scale);
 f32 mat_sum(matrix *mat);
 u64 mat_argmax(matrix* mat);
@@ -309,6 +310,57 @@ void draw_mnist_digit(f32* data) {
   printf("\x1b[0m");
 }
 
+void create_mnist_model(mem_arena* arena, model_context* model) {
+  model_var* input = mv_create(arena, model, 784, 1, MV_FLAG_INPUT);
+
+  model_var* W0 = mv_create(arena, model, 16, 784, MV_FLAG_REQUIRES_GRAD | MV_FLAG_PARAMETER);
+  model_var* W1 = mv_create(arena, model, 16, 16, MV_FLAG_REQUIRES_GRAD | MV_FLAG_PARAMETER);
+  model_var* W2 = mv_create(arena, model, 10, 16, MV_FLAG_REQUIRES_GRAD | MV_FLAG_PARAMETER);
+
+  f32 bound0 = sqrtf(6.0f / (784 + 16));
+  f32 bound1 = sqrtf(6.0f / (16 + 16));
+  f32 bound2 = sqrtf(6.0f / (16 + 10));
+  mat_fill_rand(W0->val, -bound0, bound0);
+  mat_fill_rand(W1->val, -bound1, bound1);
+  mat_fill_rand(W2->val, -bound2, bound2);
+
+  model_var* b0 = mv_create(arena, model, 16, 1, MV_FLAG_REQUIRES_GRAD | MV_FLAG_PARAMETER);
+  model_var* b1 = mv_create(arena, model, 16, 1, MV_FLAG_REQUIRES_GRAD | MV_FLAG_PARAMETER);
+  model_var* b2 = mv_create(arena, model, 10, 1, MV_FLAG_REQUIRES_GRAD | MV_FLAG_PARAMETER);
+
+  model_var* z0_a = mv_matmul(arena, model, W0, input, 0);
+  model_var* z0_b = mv_add(arena, model, z0_a, b0, 0);
+  model_var* a0 = mv_relu(arena, model, z0_b, 0);
+
+  model_var* z1_a = mv_matmul(arena, model, W1, a0, 0);
+  model_var* z1_b = mv_add(arena, model, z1_a, b1, 0);
+  model_var* z1_c = mv_relu(arena, model, z1_b, 0);
+  model_var* a1 = mv_add(arena, model, a0, z1_c, 0);
+
+  model_var* z2_a = mv_matmul(arena, model, W2, a1, 0);
+  model_var* z2_b = mv_add(arena, model, z2_a, b2, 0);
+  model_var* output = mv_softmax(arena, model, z2_b, MV_FLAG_OUTPUT);
+
+  model_var* y = mv_create(arena, model, 10, 1, MV_FLAG_DESIRED_OUTPUT);
+
+    model_var* cost = mv_cross_entropy(arena, model, y, output, MV_FLAG_COST);
+}
+
+/* makes a new matrix and returns a ptr to it
+ * matrix lives in arena the caller passes in
+ * no free, matrix goes away when its arena is cleared
+ * nums are stored as one flat array
+ */
+matrix* mat_create(mem_arena* arena, u32 rows, u32 cols) {
+    matrix* mat = PUSH_STRUCT(arena, matrix);
+
+    mat->rows = rows;
+    mat->cols = cols;
+    mat->data = PUSH_ARRAY(arena, f32, (u64)rows * cols);
+
+    return mat;
+}
+
 /* reads a .mat file (header + floats) into a new matrix in arena
  * the shape comes from the header, so the caller doesn't pass one
  * returns NULL if the file is missing, the header is wrong, or the file has
@@ -340,21 +392,6 @@ matrix *mat_load(mem_arena *arena, const char *path) {
   }
 
   fclose(f);
-  return mat;
-}
-
-/* makes a new matrix and returns a ptr to it
- * matrix lives in arena the caller passes in
- * no free, matrix goes away when its arena is cleared
- * nums are stored as one flat array
- */
-matrix *mat_create(mem_arena *arena, u32 rows, u32 cols) {
-  matrix *mat = PUSH_STRUCT(arena, matrix);
-
-  mat->rows = rows;
-  mat->cols = cols;
-  mat->data = PUSH_ARRAY(arena, f32, (u64)rows * cols);
-
   return mat;
 }
 
@@ -393,6 +430,15 @@ void mat_fill(matrix *mat, f32 x) {
   for (u64 i = 0; i < size; i++) {
     mat->data[i] = x;
   }
+}
+
+void mat_fill_rand(matrix* mat, f32 lower, f32 upper) {
+    u64 size = (u64)mat->rows * mat->cols;
+
+    for (u64 i = 0; i < size; i++) {
+        mat->data[i] = prng_randf() * (upper - lower) + lower;
+    }
+
 }
 
 /* multiplies every element by scale, in place. original values get overwritten
@@ -1040,7 +1086,8 @@ void model_prog_compute_grads(model_program* prog) {
     if (
       num_inputs == 2 &&
       (a->flags & MV_FLAG_REQUIRES_GRAD) != MV_FLAG_REQUIRES_GRAD && 
-      (b->flags & MV_FLAG_REQUIRES_GRAD) != MV_FLAG_REQUIRES_GRAD
+      (b->flags & MV_FLAG_REQUIRES_GRAD)  != MV_FLAG_REQUIRES_GRAD &&
+      (cur->flags & MV_FLAG_REQUIRES_GRAD) != MV_FLAG_REQUIRES_GRAD
     ) {
       continue;
     }
@@ -1264,8 +1311,6 @@ void model_train(model_context* model,
       model_prog_compute(&model->cost_prog);
 
       avg_cost += mat_sum(model->cost->val);
-      /* the guess is the class with the highest probability, the
-       * == gives 1 if it matches the label's 1, else 0 */
       num_correct +=
         mat_argmax(model->output->val) == 
         mat_argmax(model->desired_output->val);
