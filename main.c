@@ -4,9 +4,13 @@
 #include "arena.c"
 #include "prng.c"
 
+#include <time.h>
+
 #define MNIST_IMG_SIDE 28 /* each digit is a 28 x 28 pixel grayscale image */
 #define MNIST_IMG_SIZE (MNIST_IMG_SIDE * MNIST_IMG_SIDE) /* 784 */
 #define MNIST_NUM_CLASSES 10 /* digits 0-9, the width of a one-hot label row */
+/* width of each hidden layer, a model choice, not a fact about mnist */
+#define MNIST_HIDDEN_SIZE 16
 
 /* math layer */
 
@@ -199,6 +203,14 @@ void draw_mnist_digit(f32* data);
 void create_mnist_model(mem_arena* arena, model_context* model);
 
 int main(void) {
+  /* seed the rng from the clock so each run starts from different weights
+   * printed so a weird run can be reproduced by passing the same seed back
+   * in, cast since u64's printf specifier differs between platforms
+   */
+  u64 seed = (u64)time(NULL);
+  prng_seed(seed, 1);
+  printf("seed: %llu\n", (unsigned long long)seed);
+
   /* create big perm arena so we don't have to worry about mem space */
   mem_arena *perm_arena = arena_create(GiB(1), MiB(1));
   if (perm_arena == NULL) {
@@ -291,11 +303,57 @@ int main(void) {
   }
   printf("\n\n");
 
+  /* build the graph, then sort it into programs, compile has to come after
+   * create_mnist_model since the sort needs the finished graph */
+  model_context* model = model_create(perm_arena);
+  create_mnist_model(perm_arena, model);
+  model_compile(perm_arena, model);
+
+  /* run test image 0 through the untrained model, with random weights the
+   * guesses should come out roughly even (~0.1 each) */
+  memcpy(model->input->val->data, test_images->data,
+         sizeof(f32) * MNIST_IMG_SIZE);
+  model_feedforward(model);
+  printf("pre-training output:  ");
+  for (u32 i = 0; i < MNIST_NUM_CLASSES; i++) {
+    printf("%.2f ", model->output->val->data[i]);
+  }
+  printf("\n\n");
+
+  /* designated initializer (c99), sets fields by name so the order doesn't
+   * matter, any field left out is zeroed */
+  model_training_desc training_desc = {
+    .train_images = train_images,
+    .train_labels = train_labels,
+    .test_images = test_images,
+    .test_labels = test_labels,
+
+    .epochs = 10,
+    .batch_size = 50,
+    .learning_rate = 0.01f,
+  };
+  model_train(model, &training_desc);
+
+  /* same image after training, the probability should pile up on its label */
+  memcpy(model->input->val->data, test_images->data,
+         sizeof(f32) * MNIST_IMG_SIZE);
+  model_feedforward(model);
+  printf("post-training output: ");
+  for (u32 i = 0; i < MNIST_NUM_CLASSES; i++) {
+    printf("%.2f ", model->output->val->data[i]);
+  }
+  printf("\n\n");
+
   arena_destroy(perm_arena);
 
   return 0;
 }
 
+/* prints one 28 x 28 image to the terminal, 2 spaces per pixel so it comes
+ * out roughly square, with the pixel's brightness as the background color
+ * data points at the image's first pixel, so pass images->data + n * 784 to
+ * draw sample n
+ */
 void draw_mnist_digit(f32* data) {
   for (u32 y = 0; y < MNIST_IMG_SIDE; y++) {
     for (u32 x = 0; x < MNIST_IMG_SIDE; x++) {
@@ -310,40 +368,70 @@ void draw_mnist_digit(f32* data) {
   printf("\x1b[0m");
 }
 
+/* builds the network as a graph:
+ *   input (784) -> layer 0 (16) -> layer 1 (16) -> layer 2 (10) -> softmax
+ * each layer is W * x + b, the hidden ones followed by a relu
+ * shapes: W is (outputs x inputs) so W * x turns an (inputs x 1) column into
+ * an (outputs x 1) column, b is (outputs x 1) to match
+ * if a shape is wrong, mv_matmul/mv_add return NULL and nothing here checks,
+ * so a crash right after changing these sizes is most likely a mismatch
+ */
 void create_mnist_model(mem_arena* arena, model_context* model) {
-  model_var* input = mv_create(arena, model, 784, 1, MV_FLAG_INPUT);
+  model_var* input = mv_create(arena, model, MNIST_IMG_SIZE, 1, MV_FLAG_INPUT);
 
-  model_var* W0 = mv_create(arena, model, 16, 784, MV_FLAG_REQUIRES_GRAD | MV_FLAG_PARAMETER);
-  model_var* W1 = mv_create(arena, model, 16, 16, MV_FLAG_REQUIRES_GRAD | MV_FLAG_PARAMETER);
-  model_var* W2 = mv_create(arena, model, 10, 16, MV_FLAG_REQUIRES_GRAD | MV_FLAG_PARAMETER);
+  model_var* W0 = mv_create(arena, model, MNIST_HIDDEN_SIZE, MNIST_IMG_SIZE,
+                            MV_FLAG_REQUIRES_GRAD | MV_FLAG_PARAMETER);
+  model_var* W1 = mv_create(arena, model, MNIST_HIDDEN_SIZE, MNIST_HIDDEN_SIZE,
+                            MV_FLAG_REQUIRES_GRAD | MV_FLAG_PARAMETER);
+  model_var* W2 = mv_create(arena, model, MNIST_NUM_CLASSES, MNIST_HIDDEN_SIZE,
+                            MV_FLAG_REQUIRES_GRAD | MV_FLAG_PARAMETER);
 
-  f32 bound0 = sqrtf(6.0f / (784 + 16));
-  f32 bound1 = sqrtf(6.0f / (16 + 16));
-  f32 bound2 = sqrtf(6.0f / (16 + 10));
+  /* xavier/glorot init: uniform in +-sqrt(6 / (fan_in + fan_out))
+   * keeps each layer's outputs about the same size as its inputs, so values
+   * don't blow up or shrink to nothing as they pass through the layers */
+  f32 bound0 = sqrtf(6.0f / (MNIST_IMG_SIZE + MNIST_HIDDEN_SIZE));
+  f32 bound1 = sqrtf(6.0f / (MNIST_HIDDEN_SIZE + MNIST_HIDDEN_SIZE));
+  f32 bound2 = sqrtf(6.0f / (MNIST_HIDDEN_SIZE + MNIST_NUM_CLASSES));
   mat_fill_rand(W0->val, -bound0, bound0);
   mat_fill_rand(W1->val, -bound1, bound1);
   mat_fill_rand(W2->val, -bound2, bound2);
 
-  model_var* b0 = mv_create(arena, model, 16, 1, MV_FLAG_REQUIRES_GRAD | MV_FLAG_PARAMETER);
-  model_var* b1 = mv_create(arena, model, 16, 1, MV_FLAG_REQUIRES_GRAD | MV_FLAG_PARAMETER);
-  model_var* b2 = mv_create(arena, model, 10, 1, MV_FLAG_REQUIRES_GRAD | MV_FLAG_PARAMETER);
+  model_var* b0 = mv_create(arena, model, MNIST_HIDDEN_SIZE, 1,
+                            MV_FLAG_REQUIRES_GRAD | MV_FLAG_PARAMETER);
+  model_var* b1 = mv_create(arena, model, MNIST_HIDDEN_SIZE, 1,
+                            MV_FLAG_REQUIRES_GRAD | MV_FLAG_PARAMETER);
+  model_var* b2 = mv_create(arena, model, MNIST_NUM_CLASSES, 1,
+                            MV_FLAG_REQUIRES_GRAD | MV_FLAG_PARAMETER);
 
+  /* biases start at 0 (PUSH_ARRAY zeroes), only the weights need to be
+   * random to break the symmetry */
+
+  /* layer 0: a0 = relu(W0 * input + b0) */
   model_var* z0_a = mv_matmul(arena, model, W0, input, 0);
   model_var* z0_b = mv_add(arena, model, z0_a, b0, 0);
   model_var* a0 = mv_relu(arena, model, z0_b, 0);
 
+  /* layer 1: a1 = a0 + relu(W1 * a0 + b1)
+   * adding a0 back in is a residual (skip) connection, the layer only has to
+   * learn a change to a0, and grads get a shortcut straight back through
+   * the add, needs W1 square so both sides of the add have the same shape */
   model_var* z1_a = mv_matmul(arena, model, W1, a0, 0);
   model_var* z1_b = mv_add(arena, model, z1_a, b1, 0);
   model_var* z1_c = mv_relu(arena, model, z1_b, 0);
   model_var* a1 = mv_add(arena, model, a0, z1_c, 0);
 
+  /* layer 2: output = softmax(W2 * a1 + b2), 10 probabilities, no relu
+   * since softmax already turns the scores into the final answer */
   model_var* z2_a = mv_matmul(arena, model, W2, a1, 0);
   model_var* z2_b = mv_add(arena, model, z2_a, b2, 0);
   model_var* output = mv_softmax(arena, model, z2_b, MV_FLAG_OUTPUT);
 
-  model_var* y = mv_create(arena, model, 10, 1, MV_FLAG_DESIRED_OUTPUT);
+  /* training only: y holds the one-hot label, cost compares it to output
+   * neither is in forward_prog since output doesn't depend on them */
+  model_var* y = mv_create(arena, model, MNIST_NUM_CLASSES, 1,
+                           MV_FLAG_DESIRED_OUTPUT);
 
-    model_var* cost = mv_cross_entropy(arena, model, y, output, MV_FLAG_COST);
+  model_var* cost = mv_cross_entropy(arena, model, y, output, MV_FLAG_COST);
 }
 
 /* makes a new matrix and returns a ptr to it
@@ -352,13 +440,13 @@ void create_mnist_model(mem_arena* arena, model_context* model) {
  * nums are stored as one flat array
  */
 matrix* mat_create(mem_arena* arena, u32 rows, u32 cols) {
-    matrix* mat = PUSH_STRUCT(arena, matrix);
+  matrix* mat = PUSH_STRUCT(arena, matrix);
 
-    mat->rows = rows;
-    mat->cols = cols;
-    mat->data = PUSH_ARRAY(arena, f32, (u64)rows * cols);
+  mat->rows = rows;
+  mat->cols = cols;
+  mat->data = PUSH_ARRAY(arena, f32, (u64)rows * cols);
 
-    return mat;
+  return mat;
 }
 
 /* reads a .mat file (header + floats) into a new matrix in arena
@@ -432,12 +520,18 @@ void mat_fill(matrix *mat, f32 x) {
   }
 }
 
+/* sets every element to a random value in [lower, upper]
+ * prng_randf gives 0-1, * (upper - lower) stretches it to the range's width,
+ * + lower slides it into place
+ * ML use: initializing weights, if they all started equal every neuron in a
+ * layer would get the same grad and learn the same thing
+ */
 void mat_fill_rand(matrix* mat, f32 lower, f32 upper) {
-    u64 size = (u64)mat->rows * mat->cols;
+  u64 size = (u64)mat->rows * mat->cols;
 
-    for (u64 i = 0; i < size; i++) {
-        mat->data[i] = prng_randf() * (upper - lower) + lower;
-    }
+  for (u64 i = 0; i < size; i++) {
+    mat->data[i] = prng_randf() * (upper - lower) + lower;
+  }
 
 }
 
@@ -472,18 +566,19 @@ f32 mat_sum(matrix *mat) {
 /* single pass over that flat array, similar to mat_sum
  * keep track of best index seen so far
  * start at zero, update when pass over larger value
+ * ML use: the model's guess is the argmax of its output probabilities
  */
 u64 mat_argmax(matrix* mat) {
-    u64 size = (u64)mat->rows * mat->cols;
+  u64 size = (u64)mat->rows * mat->cols;
 
-    u64 max_i = 0;
-    for (u64 i = 0; i < size; i++) {
-        if (mat->data[i] > mat->data[max_i]) {
-            max_i = i;
-        }
+  u64 max_i = 0;
+  for (u64 i = 0; i < size; i++) {
+    if (mat->data[i] > mat->data[max_i]) {
+      max_i = i;
     }
+  }
 
-    return max_i;
+  return max_i;
 }
 
 /* add element by element, out = a + b
@@ -509,6 +604,7 @@ b32 mat_add(matrix *out, const matrix *a, const matrix *b) {
   return true;
 }
 
+/* same as mat_add but loop does a - b instead */
 b32 mat_sub(matrix *out, const matrix *a, const matrix *b) {
   if (a->rows != b->rows || a->cols != b->cols) {
     return false;
@@ -1086,8 +1182,7 @@ void model_prog_compute_grads(model_program* prog) {
     if (
       num_inputs == 2 &&
       (a->flags & MV_FLAG_REQUIRES_GRAD) != MV_FLAG_REQUIRES_GRAD && 
-      (b->flags & MV_FLAG_REQUIRES_GRAD)  != MV_FLAG_REQUIRES_GRAD &&
-      (cur->flags & MV_FLAG_REQUIRES_GRAD) != MV_FLAG_REQUIRES_GRAD
+      (b->flags & MV_FLAG_REQUIRES_GRAD) != MV_FLAG_REQUIRES_GRAD
     ) {
       continue;
     }
