@@ -67,3 +67,8 @@ model_prog_compute_grads(model_program* prog)
 
 in ReLU, there is no interdependence between variables in the input, so like the first variable in the output vector only depended on the input, but softmax depends on all the variables, so the Jacobian is not diagonal it has stuff everywhere, so let's just calculate the jacobian directly for softmax and then multiply by jacobian directly
     - output has to be a vector for this to work
+
+## model training
+stochastic gradient descent
+    - take all of our training examples, split into batches, find gradients for parameters with respect to the cost for each example in the batch, avg it out, and directly subtract those gradients from our model
+    - true gradient descent goes over everything but this is lighter and easier for this project
