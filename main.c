@@ -14,6 +14,11 @@
 
 /* math layer */
 
+/* smallest q cross entropy will use, so log(q) and p / q stay finite when a
+ * softmax output underflows to 0, -log(1e-7) is only ~16
+ */
+#define CROSS_ENTROPY_EPS 1e-7f
+
 /* a 2D grid of floats
  * element (r, c) lives at data[c + r * cols]
  * the struct only holds the shape and a ptr, the floats live in an arena
@@ -432,6 +437,7 @@ void create_mnist_model(mem_arena* arena, model_context* model) {
                            MV_FLAG_DESIRED_OUTPUT);
 
   model_var* cost = mv_cross_entropy(arena, model, y, output, MV_FLAG_COST);
+  (void)cost; /* stored as model->cost by its flag, named for readability */
 }
 
 /* makes a new matrix and returns a ptr to it
@@ -729,6 +735,7 @@ b32 mat_relu(matrix *out, const matrix *in) {
 
 /* turns raw scores into probabilities: all positive, summing to 1
  * treats the whole matrix as one distribution, so pass a single vector
+ * subtract the max before expf to avoid overflow
  * ML use: the last layer, so output[i] reads as "chance the digit is i"
  */
 b32 mat_softmax(matrix *out, const matrix *in) {
@@ -738,10 +745,15 @@ b32 mat_softmax(matrix *out, const matrix *in) {
   }
 
   u64 size = (u64)out->rows * out->cols;
-  
+
+  f32 max = in->data[0];
+  for (u64 i = 1; i < size; i++) {
+    max = MAX(max, in->data[i]);
+  }
+
   f32 sum = 0.0f;
-  for (u64 i = 0; i <size; i++) {
-    out->data[i] = expf(in->data[i]);
+  for (u64 i = 0; i < size; i++) {
+    out->data[i] = expf(in->data[i] - max);
     sum += out->data[i];
   }
 
@@ -758,11 +770,15 @@ b32 mat_cross_entropy(matrix *out, const matrix *p, const matrix *q) {
   if (p->rows != q->rows || p->cols != q->cols) { return false; }
   if (out->rows != p->rows || out->cols != p->cols) { return false; }
 
-  /* p * -log(q) */
+  /* p * -log(q)
+   * q is clamped to CROSS_ENTROPY_EPS, -logf(0) is inf, so a wrong prediction
+   * could make the whole avg cost inf
+   */
   u64 size = (u64)out->rows * out->cols;
   for (u64 i = 0; i < size; i++) {
-    out->data[i] = p->data[i] == 0.0f ? 
-      0.0f : p->data[i] * -logf(q->data[i]);
+    f32 q_safe = MAX(q->data[i], CROSS_ENTROPY_EPS);
+    out->data[i] = p->data[i] == 0.0f ?
+      0.0f : p->data[i] * -logf(q_safe);
   }
 
   return true;
@@ -841,7 +857,8 @@ b32 mat_cross_entropy_add_grad(matrix* p_grad, matrix* q_grad,
     }
 
     for (u64 i = 0; i < size; i++) {
-      p_grad->data[i] += -logf(q->data[i]) * grad->data[i];
+      f32 q_safe = MAX(q->data[i], CROSS_ENTROPY_EPS);
+      p_grad->data[i] += -logf(q_safe) * grad->data[i];
     }
   }
 
@@ -850,8 +867,13 @@ b32 mat_cross_entropy_add_grad(matrix* p_grad, matrix* q_grad,
       return false;
     }
 
+    /* same clamp as the forward pass, -p / 0 would be -inf, which turns
+     * into NaN in the weights on the next update
+     * when clamped, the grad is still big and points the right way (raise
+     * q), it's just finite */
     for (u64 i = 0; i < size; i++) {
-      q_grad->data[i] += -p->data[i] / q->data[i] * grad->data[i];
+      f32 q_safe = MAX(q->data[i], CROSS_ENTROPY_EPS);
+      q_grad->data[i] += -p->data[i] / q_safe * grad->data[i];
     }
   }
 
