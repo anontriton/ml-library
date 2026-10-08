@@ -1,4 +1,17 @@
-# ml notes
+# ml-library
+
+## credits
+https://github.com/Magicalbat/videos
+followed this guy's youtube video but planning on adding more:
+    - char-level tokenizer, map each char to an int
+    - attention, a single-head causal self-attention block, then a small transformer
+    - BPE(maybe?)
+    will need some new pieces in the graph:
+        - an embedding lookup op with gradients
+        - transpose and scale ops
+        - a causal mask
+        - probably layer norm
+        - fuze softmax + cross-entropy op
 
 ## ML FRAMEWORK
 
