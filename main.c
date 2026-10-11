@@ -71,9 +71,8 @@ b32 mat_cross_entropy_add_grad(matrix* p_grad, matrix* q_grad,
  * remembers which op made it and from which input nodes
  */
 
-/* bit flags describing a model_var, combined with | and tested with &
- * e.g. a weight is MV_FLAG_REQUIRES_GRAD | MV_FLAG_PARAMETER
- * each flag is its own bit so any combination fits in one u32
+/* flags describing a model_var, e.g. a weight is
+ * MV_FLAG_REQUIRES_GRAD | MV_FLAG_PARAMETER
  * REQUIRES_GRAD:  gets a grad matrix, backprop computes d(cost)/d(this)
  * PARAMETER:      a weight or bias, what training actually updates
  * INPUT:          where an image gets copied in
@@ -200,7 +199,7 @@ void model_prog_compute_grads(model_program* prog);
 /* model, the high-level api main uses */
 model_context* model_create(mem_arena* arena);
 void model_compile(mem_arena* arena, model_context* model);
-void model_feedforward(model_context* model); /* run function */
+void model_feedforward(model_context* model);
 void model_train(model_context* model,
                  const model_training_desc* training_desc);
 
@@ -209,8 +208,8 @@ void create_mnist_model(mem_arena* arena, model_context* model);
 
 int main(void) {
   /* seed the rng from the clock so each run starts from different weights
-   * printed so a weird run can be reproduced by passing the same seed back
-   * in, cast since u64's printf specifier differs between platforms
+   * the seed is printed for reference, but there's no way to pass it back
+   * in yet, so a run can't be reproduced
    */
   u64 seed = (u64)time(NULL);
   prng_seed(seed, 1);
@@ -325,8 +324,6 @@ int main(void) {
   }
   printf("\n\n");
 
-  /* designated initializer (c99), sets fields by name so the order doesn't
-   * matter, any field left out is zeroed */
   model_training_desc training_desc = {
     .train_images = train_images,
     .train_labels = train_labels,
@@ -440,10 +437,8 @@ void create_mnist_model(mem_arena* arena, model_context* model) {
   (void)cost; /* stored as model->cost by its flag, named for readability */
 }
 
-/* makes a new matrix and returns a ptr to it
- * matrix lives in arena the caller passes in
- * no free, matrix goes away when its arena is cleared
- * nums are stored as one flat array
+/* the matrix lives in the caller's arena, there's no free, it goes away
+ * when the arena is cleared
  */
 matrix* mat_create(mem_arena* arena, u32 rows, u32 cols) {
   matrix* mat = PUSH_STRUCT(arena, matrix);
@@ -464,20 +459,17 @@ matrix *mat_load(mem_arena *arena, const char *path) {
   FILE *f = fopen(path, "rb");
   if (f == NULL) { return NULL; }
 
-  /* read the 16-byte header into the struct */
   mat_file_header header;
   if (fread(&header, sizeof(header), 1, f) != 1) {
     fclose(f);
     return NULL;
   }
 
-  /* verify */
   if (memcmp(header.magic, "MAT1", 4) != 0 || header.version != 1) {
     fclose(f);
     return NULL;
   }
 
-  /* allocate using the shape from the file, then read the data into it */
   matrix *mat = mat_create(arena, header.rows, header.cols);
   u64 count = (u64)header.rows * header.cols;
   if (fread(mat->data, sizeof(f32), count, f) != count) {
@@ -489,10 +481,8 @@ matrix *mat_load(mem_arena *arena, const char *path) {
   return mat;
 }
 
-/* copies all the nums from src into dst
- * only copies the nums, not the struct, dst must already exist
- * memcpy works on bytes, which is why it multiplies by sizeof(f32)
- * returns false if the shapes don't match
+/* copies src's values into dst, which must already exist with the same
+ * shape, returns false if the shapes don't match
  */
 b32 mat_copy(matrix *dst, matrix *src) {
   if (dst->rows != src->rows || dst->cols != src->cols) {
@@ -504,20 +494,11 @@ b32 mat_copy(matrix *dst, matrix *src) {
   return true;
 }
 
-/* sets every element to zero, a single memset that writes zero bytes over
- * the whole data array
- * useful for resetting gradients before each training step
- */
+/* ML use: resetting gradients before each training step */
 void mat_clear(matrix *mat) {
   memset(mat->data, 0, sizeof(f32) * (u64)mat->rows * mat->cols);
 }
 
-/* sets every element to x
- * it computes the total element count (rows * cols as u64),
- * then loops over the flat array and assigns x to each slot
- * because the storage is flat, one loop covers the whole matrix
- * and shape doesn't matter
- */
 void mat_fill(matrix *mat, f32 x) {
   u64 size = (u64)mat->rows * mat->cols;
 
@@ -526,9 +507,7 @@ void mat_fill(matrix *mat, f32 x) {
   }
 }
 
-/* sets every element to a random value in [lower, upper]
- * prng_randf gives 0-1, * (upper - lower) stretches it to the range's width,
- * + lower slides it into place
+/* sets every element to a uniform random value in [lower, upper]
  * ML use: initializing weights, if they all started equal every neuron in a
  * layer would get the same grad and learn the same thing
  */
@@ -541,8 +520,7 @@ void mat_fill_rand(matrix* mat, f32 lower, f32 upper) {
 
 }
 
-/* multiplies every element by scale, in place. original values get overwritten
- * same flat loop as mat_fill, with data[i] *= scale
+/* multiplies every element by scale, in place
  * ML use: the learning-rate step (gradient * learning_rate),
  * or averaging (multiplying by 1/N)
  */
@@ -554,9 +532,7 @@ void mat_scale(matrix *mat, f32 scale) {
   }
 }
 
-/* adds up every element and returns the total as one f32
- * starts sum at 0.0f, loops over the flat array adding each value
- * ML use: turning a matrix of per-sample losses into one total loss number
+/* ML use: turning a matrix of per-sample losses into one total loss number
  */
 f32 mat_sum(matrix *mat) {
   u64 size = (u64)mat->rows * mat->cols;
@@ -569,9 +545,7 @@ f32 mat_sum(matrix *mat) {
   return sum;
 }
 
-/* single pass over that flat array, similar to mat_sum
- * keep track of best index seen so far
- * start at zero, update when pass over larger value
+/* returns the flat index of the largest element
  * ML use: the model's guess is the argmax of its output probabilities
  */
 u64 mat_argmax(matrix* mat) {
@@ -587,11 +561,7 @@ u64 mat_argmax(matrix* mat) {
   return max_i;
 }
 
-/* add element by element, out = a + b
- * each slot of out get sthe sum of the matching slots in a and b
- * the caller provies out (already created) and the function only fills it in
- * because storage is flat and checks for matching shapes, idx i points to the
- * same row, col in all three matrices, so one loop is enough
+/* out = a + b element by element, out must already exist with a's shape
  * ML use: adding a bias, and the update step weights = weights - lr * grad
  */
 b32 mat_add(matrix *out, const matrix *a, const matrix *b) {
@@ -1397,8 +1367,6 @@ void model_train(model_context* model,
         mat_sub(cur->val, cur->val, cur->grad);
       }
 
-      /* \r goes back to the start of the line without a newline, so
-       * the progress line overwrites itself, fflush shows it now */
       printf(
         "Epoch %2d / %2d, Batch %4d / %4d, Avg Cost: %.4f\r",
         epoch + 1, training_desc->epochs,
