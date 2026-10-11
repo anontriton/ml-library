@@ -212,3 +212,12 @@ stochastic gradient descent\
 - debugging tips:
   - overfit one tiny batch first, loss should go to ~0, if it can't something is broken
   - plain SGD is slow on transformers, probably want Adam, which goes in the training layer
+
+## misc
+
+big picture overview\
+- arena owns al the memory. every node and matrix and program live in in
+- graph hands out node ids. mv_create and the mv_* ops build nodes and give each one the next number
+- model knows which nodes play which roles (input, output, label, cost). it compiles the prgorams and runs the forward pass
+- train loops over the data, copies samples into the model's input nodes, runs the programs and updates the params
+
