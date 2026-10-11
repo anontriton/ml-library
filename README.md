@@ -49,19 +49,19 @@ On top of that I added:
 - input validation for labels and dataset shapes
 - numerically stable softmax (max subtraction) and clamped cross-entropy
 - clock-based RNG seeding
+- redesign the core so that the graph only builds nodes, the model is given
+  its input/output/cost nodes explicitly and training is its own layer
 
 ## Roadmap
 
-1. Redesign the core: the graph only builds nodes, the model is given its
-   input/output/cost nodes explicitly, and training is its own layer.
-2. Split the single `main.c` into library modules (`src/`) and an MNIST
+- Split the single `main.c` into library modules (`src/`) and an MNIST
    example (`examples/`).
-3. Hardening: check every return value and allocation, an unbiased
+- Hardening: check every return value and allocation, an unbiased
    (Fisher-Yates) shuffle, an O(n) softmax backward pass, and a seed that
    can be passed on the command line for reproducible runs.
-4. Gradient-check tests for every op.
-5. A character-level tokenizer.
-6. Single-head causal self-attention, then a small transformer trained to
+- Gradient-check tests for every op.
+- A character-level tokenizer.
+- Single-head causal self-attention, then a small transformer trained to
    generate text.
 
 My study notes are in [NOTES.md](NOTES.md).
