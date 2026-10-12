@@ -1,4 +1,8 @@
+#ifndef ARENA_H
+#define ARENA_H
+
 #include "arena.h"
+#include "base.h"
 
 /* row-major: element (r, c) lives at data[c + r * cols], in an arena */
 typedef struct {
@@ -27,3 +31,5 @@ b32 mat_softmax_add_grad(matrix *out, const matrix *softmax_out,
                          const matrix *grad);
 b32 mat_cross_entropy_add_grad(matrix *p_grad, matrix *q_grad, const matrix *p,
                                const matrix *q, const matrix *grad);
+
+#endif /* ARENA_H */
