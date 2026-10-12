@@ -1,9 +1,6 @@
 #include "arena.h"
 #include "prng.h"
 
-#include "arena.c"
-#include "prng.c"
-
 #include <time.h>
 
 #define MNIST_IMG_SIDE 28 /* each digit is a 28 x 28 pixel grayscale image */
@@ -207,7 +204,7 @@ int main(void) {
    * the seed is printed for reference, but there's no way to pass it back
    * in yet, so a run can't be reproduced
    */
-  u64 seed = (u64)time(NULL);
+  u64 seed = 42; // (u64)time(NULL);
   prng_seed(seed, 1);
   printf("seed: %llu\n", (unsigned long long)seed);
 

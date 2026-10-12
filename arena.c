@@ -1,3 +1,9 @@
+#ifndef _DEFAULT_SOURCE
+#define _DEFAULT_SOURCE
+#endif
+
+#include "arena.h"
+
 mem_arena *arena_create(u64 reserve_size, u64 commit_size) {
   u32 pagesize = plat_get_pagesize();
 
@@ -114,10 +120,6 @@ mem_arena_temp arena_scratch_get(mem_arena **conflicts, u32 num_conflicts) {
 void arena_scratch_release(mem_arena_temp scratch) { arena_temp_end(scratch); }
 
 #if defined(__linux__) || defined(__APPLE__)
-
-#ifndef _DEFAULT_SOURCE
-#define _DEFAULT_SOURCE
-#endif
 
 #include <sys/mman.h>
 #include <unistd.h>

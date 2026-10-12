@@ -1,3 +1,6 @@
+#ifndef PRNG_H
+#define PRNG_H
+
 // Based on pcg random number generator (https://www.pcg-random.org)
 // Licensed under Apache License 2.0 (NO WARRANTY, etc. see website)
 
@@ -16,3 +19,5 @@ u32 prng_rand(void);
 
 f32 prng_randf_r(prng_state *rng);
 f32 prng_randf(void);
+
+#endif /* PRNG_H */
