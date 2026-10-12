@@ -4,6 +4,35 @@
 
 #include "arena.h"
 
+#if defined(__linux__) || defined(__APPLE__)
+
+#include <sys/mman.h>
+#include <unistd.h>
+
+static u32 plat_get_pagesize(void) { return (u32)sysconf(_SC_PAGESIZE); }
+
+static void *plat_mem_reserve(u64 size) {
+  void *out = mmap(NULL, size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (out == MAP_FAILED) {
+    return NULL;
+  }
+  return out;
+}
+
+static b32 plat_mem_commit(void *ptr, u64 size) {
+  i32 ret = mprotect(ptr, size, PROT_READ | PROT_WRITE);
+  return ret == 0;
+}
+
+static b32 plat_mem_release(void *ptr, u64 size) {
+  i32 ret = munmap(ptr, size);
+  return ret == 0;
+}
+
+#else
+#error "only Linux and macOS are supported"
+#endif
+
 mem_arena *arena_create(u64 reserve_size, u64 commit_size) {
   u32 pagesize = plat_get_pagesize();
 
@@ -83,7 +112,7 @@ void arena_temp_end(mem_arena_temp temp) {
   arena_pop_to(temp.arena, temp.start_pos);
 }
 
-static __thread mem_arena *_scratch_arenas[2] = {NULL, NULL};
+static _Thread_local mem_arena *s_scratch_arenas[2] = {NULL, NULL};
 
 mem_arena_temp arena_scratch_get(mem_arena **conflicts, u32 num_conflicts) {
   i32 scratch_index = -1;
@@ -92,7 +121,7 @@ mem_arena_temp arena_scratch_get(mem_arena **conflicts, u32 num_conflicts) {
     b32 conflict_found = false;
 
     for (u32 j = 0; j < num_conflicts; j++) {
-      if (_scratch_arenas[i] == conflicts[j]) {
+      if (s_scratch_arenas[i] == conflicts[j]) {
         conflict_found = true;
         break;
       }
@@ -108,7 +137,7 @@ mem_arena_temp arena_scratch_get(mem_arena **conflicts, u32 num_conflicts) {
     return (mem_arena_temp){0};
   }
 
-  mem_arena **selected = &_scratch_arenas[scratch_index];
+  mem_arena **selected = &s_scratch_arenas[scratch_index];
 
   if (*selected == NULL) {
     *selected = arena_create(MiB(64), MiB(1));
@@ -118,40 +147,3 @@ mem_arena_temp arena_scratch_get(mem_arena **conflicts, u32 num_conflicts) {
 }
 
 void arena_scratch_release(mem_arena_temp scratch) { arena_temp_end(scratch); }
-
-#if defined(__linux__) || defined(__APPLE__)
-
-#include <sys/mman.h>
-#include <unistd.h>
-
-u32 plat_get_pagesize(void) { return (u32)sysconf(_SC_PAGESIZE); }
-
-void *plat_mem_reserve(u64 size) {
-  void *out = mmap(NULL, size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-  if (out == MAP_FAILED) {
-    return NULL;
-  }
-  return out;
-}
-
-b32 plat_mem_commit(void *ptr, u64 size) {
-  i32 ret = mprotect(ptr, size, PROT_READ | PROT_WRITE);
-  return ret == 0;
-}
-
-b32 plat_mem_decommit(void *ptr, u64 size) {
-  i32 ret = mprotect(ptr, size, PROT_NONE);
-  if (ret != 0)
-    return false;
-  ret = madvise(ptr, size, MADV_DONTNEED);
-  return ret == 0;
-}
-
-b32 plat_mem_release(void *ptr, u64 size) {
-  i32 ret = munmap(ptr, size);
-  return ret == 0;
-}
-
-#else
-#error "only Linux and macOS are supported"
-#endif
