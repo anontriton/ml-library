@@ -5,6 +5,10 @@
 
 #include "graph.h"
 
+#include "arena.h"
+#include "base.h"
+#include "matrix.h"
+
 /* how many of inputs[] an op uses, relies on the op enum's grouping */
 #define MV_NUM_INPUTS(op)                                                      \
   ((op) < MV_OP_UNARY_START ? 0 : ((op) < MV_OP_BINARY_START ? 1 : 2))

@@ -1,9 +1,8 @@
 #ifndef GRAPH_H
 #define GRAPH_H
 
-#include "base.h"
-
 #include "arena.h"
+#include "base.h"
 #include "matrix.h"
 
 /* graph layer

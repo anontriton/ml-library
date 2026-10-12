@@ -158,6 +158,7 @@ stochastic gradient descent\
 
 ## char-level tokenizer
 
+- before starting: rename model_training_desc's train_images / test_images (and the matching locals in model_train in train.c) to something generic like train_inputs / test_inputs. inputs won't be images anymore. left alone during the split so those commits only moved code
 - models only work w/ numbers, a tokenizer turns text into ints and back
 - char-level = every unique char in the corpus gets an id
   - tiny shakespeare has ~65 unique chars so vocab size ~65

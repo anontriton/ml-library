@@ -1,7 +1,10 @@
 #include "arena.h"
-#include "prng.h"
-#include "matrix.h"
+#include "base.h"
 #include "graph.h"
+#include "matrix.h"
+#include "model.h"
+#include "prng.h"
+#include "train.h"
 
 #include <time.h>
 
@@ -12,54 +15,8 @@
 /* width of each hidden layer, a model choice, not a fact about mnist */
 #define MNIST_HIDDEN_SIZE 16
 
-/* model layer
- * a graph's special nodes plus the two programs compiled from them
- * forward_prog: input -> output, used for inference
- * cost_prog: input + desired_output -> cost, used for training, it contains
- * the forward pass too since cost depends on output
- * only made by model_create, so every field is always set
- */
-typedef struct {
-  model_graph *graph;
-
-  model_var *input;
-  model_var *output;
-  model_var *desired_output;
-  model_var *cost;
-
-  model_program forward_prog;
-  model_program cost_prog;
-} model_context;
-
-/* everything model_create needs, all fields required */
-typedef struct {
-  model_graph *graph;
-
-  model_var *input;
-  model_var *output;
-  model_var *desired_output;
-  model_var *cost;
-} model_desc;
-
-typedef struct {
-  matrix *train_images;
-  matrix *train_labels;
-  matrix *test_images;
-  matrix *test_labels;
-
-  u32 epochs;
-  u32 batch_size;
-  f32 learning_rate;
-} model_training_desc;
-
-/* model and training */
-model_context *model_create(mem_arena *arena, const model_desc *desc);
-void model_feedforward(model_context *model);
-void model_train(model_context *model,
-                 const model_training_desc *training_desc);
-
-void draw_mnist_digit(f32 *data);
-model_context *create_mnist_model(mem_arena *arena, model_graph *graph);
+static void draw_mnist_digit(f32 *data);
+static model_context *create_mnist_model(mem_arena *arena, model_graph *graph);
 
 int main(void) {
   /* seed the rng from the clock so each run starts from different weights
@@ -212,7 +169,7 @@ int main(void) {
  * data points at the image's first pixel, so pass images->data + n * 784 to
  * draw sample n
  */
-void draw_mnist_digit(f32 *data) {
+static void draw_mnist_digit(f32 *data) {
   for (u32 y = 0; y < MNIST_IMG_SIDE; y++) {
     for (u32 x = 0; x < MNIST_IMG_SIDE; x++) {
       f32 num = data[x + y * MNIST_IMG_SIDE];
@@ -234,7 +191,7 @@ void draw_mnist_digit(f32 *data) {
  * if a shape is wrong, mv_matmul/mv_add return NULL and nothing here checks,
  * so a crash right after changing these sizes is most likely a mismatch
  */
-model_context *create_mnist_model(mem_arena *arena, model_graph *graph) {
+static model_context *create_mnist_model(mem_arena *arena, model_graph *graph) {
   model_var *input = mv_create(arena, graph, MNIST_IMG_SIZE, 1, 0);
 
   model_var *W0 = mv_create(arena, graph, MNIST_HIDDEN_SIZE, MNIST_IMG_SIZE,
@@ -298,171 +255,4 @@ model_context *create_mnist_model(mem_arena *arena, model_graph *graph) {
   };
 
   return model_create(arena, &desc);
-}
-
-/* checks desc, then builds both programs
- * returns NULL (with the reason on stderr) if desc is invalid, so a non-NULL
- * model always has its nodes and programs, nothing after this re-checks
- */
-model_context *model_create(mem_arena *arena, const model_desc *desc) {
-  if (desc->graph == NULL || desc->input == NULL || desc->output == NULL ||
-      desc->desired_output == NULL || desc->cost == NULL) {
-    fprintf(stderr, "model_create: graph and all four nodes must be set\n");
-    return NULL;
-  }
-
-  /* cross entropy compares element by element */
-  matrix *out = desc->output->val;
-  matrix *want = desc->desired_output->val;
-  if (out->rows != want->rows || out->cols != want->cols) {
-    fprintf(stderr,
-            "model_create: output is %u x %u but desired output is %u x %u\n",
-            out->rows, out->cols, want->rows, want->cols);
-    return NULL;
-  }
-
-  /* backprop seeds cost->grad with 1s, and grad only exists with this flag */
-  if ((desc->cost->flags & MV_FLAG_REQUIRES_GRAD) == 0) {
-    fprintf(stderr, "model_create: cost doesn't depend on any parameter\n");
-    return NULL;
-  }
-
-  model_context *model = PUSH_STRUCT(arena, model_context);
-
-  model->graph = desc->graph;
-  model->input = desc->input;
-  model->output = desc->output;
-  model->desired_output = desc->desired_output;
-  model->cost = desc->cost;
-
-  /* sorted once here so training doesn't redo the sort on every sample */
-  model->forward_prog = model_prog_create(arena, desc->graph, desc->output);
-  model->cost_prog = model_prog_create(arena, desc->graph, desc->cost);
-
-  return model;
-}
-
-/* runs input -> output, copy an image into model->input->val first */
-void model_feedforward(model_context *model) {
-  model_prog_compute(&model->forward_prog);
-}
-
-/* trains with mini-batch stochastic gradient descent
- * each epoch: shuffle the training order, then for each batch run every
- * sample forward + backward so the parameter grads add up, then step every
- * parameter against its averaged grad
- * after each epoch, measures cost and accuracy on the test set
- */
-void model_train(model_context *model,
-                 const model_training_desc *training_desc) {
-  matrix *train_images = training_desc->train_images;
-  matrix *train_labels = training_desc->train_labels;
-  matrix *test_images = training_desc->test_images;
-  matrix *test_labels = training_desc->test_labels;
-
-  u32 num_examples = train_images->rows;
-  u32 input_size = train_images->cols;
-  u32 output_size = train_labels->cols;
-  u32 num_tests = test_images->rows;
-
-  /* integer division, leftover samples that don't fill a batch are
-   * skipped that epoch */
-  u32 num_batches = num_examples / training_desc->batch_size;
-
-  mem_arena_temp scratch = arena_scratch_get(NULL, 0);
-
-  /* shuffle a list of sample indices instead of the data itself, moving
-   * one u32 is cheaper than moving a 784-float row */
-  u32 *training_order = PUSH_ARRAY_NZ(scratch.arena, u32, num_examples);
-  for (u32 i = 0; i < num_examples; i++) {
-    training_order[i] = i;
-  }
-
-  for (u32 epoch = 0; epoch < training_desc->epochs; epoch++) {
-    /* num_examples random swaps, so each epoch sees a new order */
-    for (u32 i = 0; i < num_examples; i++) {
-      u32 a = prng_rand() % num_examples;
-      u32 b = prng_rand() % num_examples;
-
-      u32 tmp = training_order[b];
-      training_order[b] = training_order[a];
-      training_order[a] = tmp;
-    }
-
-    for (u32 batch = 0; batch < num_batches; batch++) {
-      /* parameter grads add up over the batch, so start them at 0 */
-      for (u32 i = 0; i < model->cost_prog.size; i++) {
-        model_var *cur = model->cost_prog.vars[i];
-
-        if (cur->flags & MV_FLAG_PARAMETER) {
-          mat_clear(cur->grad);
-        }
-      }
-
-      f32 avg_cost = 0.0f;
-      for (u32 i = 0; i < training_desc->batch_size; i++) {
-        u32 order_index = batch * training_desc->batch_size + i;
-        u32 index = training_order[order_index];
-
-        memcpy(model->input->val->data, train_images->data + index * input_size,
-               sizeof(f32) * input_size);
-
-        memcpy(model->desired_output->val->data,
-               train_labels->data + index * output_size,
-               sizeof(f32) * output_size);
-
-        /* forward, then backward, which adds onto parameter grads */
-        model_prog_compute(&model->cost_prog);
-        model_prog_compute_grads(&model->cost_prog);
-
-        avg_cost += mat_sum(model->cost->val);
-      }
-      avg_cost /= (f32)training_desc->batch_size;
-
-      /* gradient descent step: w -= (lr / batch_size) * grad
-       * grad is a sum over the batch, dividing by batch_size averages
-       * it, and subtracting moves w downhill on the cost */
-      for (u32 i = 0; i < model->cost_prog.size; i++) {
-        model_var *cur = model->cost_prog.vars[i];
-
-        if ((cur->flags & MV_FLAG_PARAMETER) != MV_FLAG_PARAMETER) {
-          continue;
-        }
-
-        mat_scale(cur->grad,
-                  training_desc->learning_rate / training_desc->batch_size);
-        mat_sub(cur->val, cur->val, cur->grad);
-      }
-
-      printf("Epoch %2d / %2d, Batch %4d / %4d, Avg Cost: %.4f\r", epoch + 1,
-             training_desc->epochs, batch + 1, num_batches, avg_cost);
-      fflush(stdout);
-    }
-    printf("\n");
-
-    /* test pass: forward only, no grads or updates, on samples the
-     * model never trained on */
-    u32 num_correct = 0;
-    f32 avg_cost = 0;
-    for (u32 i = 0; i < num_tests; i++) {
-      memcpy(model->input->val->data, test_images->data + i * input_size,
-             sizeof(f32) * input_size);
-
-      memcpy(model->desired_output->val->data,
-             test_labels->data + i * output_size, sizeof(f32) * output_size);
-
-      model_prog_compute(&model->cost_prog);
-
-      avg_cost += mat_sum(model->cost->val);
-      num_correct += mat_argmax(model->output->val) ==
-                     mat_argmax(model->desired_output->val);
-    }
-
-    avg_cost /= (f32)num_tests;
-    printf("Test Completed. Accuracy: %5d / %5d (%.1f%%), Avg Cost: %.4f\n",
-           num_correct, num_tests, (f32)num_correct / num_tests * 100.0f,
-           avg_cost);
-  }
-
-  arena_scratch_release(scratch);
 }

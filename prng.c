@@ -1,5 +1,7 @@
 #include "prng.h"
 
+#include "base.h"
+
 static prng_state s_prng_state = {
     0x853c49e6748fea9bULL,
     0xda3e39cb94b95bdbULL,

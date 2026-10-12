@@ -8,6 +8,8 @@
 
 #include "matrix.h"
 
+#include "arena.h"
+#include "base.h"
 #include "prng.h"
 
 /* smallest q cross entropy will use, so log(q) and p / q stay finite when a

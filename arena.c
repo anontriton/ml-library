@@ -4,6 +4,8 @@
 
 #include "arena.h"
 
+#include "base.h"
+
 #if defined(__linux__) || defined(__APPLE__)
 
 #include <sys/mman.h>

@@ -4,7 +4,7 @@ LDLIBS  := -lm
 
 # each .c is compiled on its own into a .o, then the .o files are linked
 # into one binary. editing one .c only recompiles that file
-SRCS    := main.c arena.c prng.c matrix.c graph.c
+SRCS    := main.c arena.c prng.c matrix.c graph.c model.c train.c
 
 RELEASE_FLAGS := -O2
 # sanitizers catch out-of-bounds reads/writes and undefined behavior,
