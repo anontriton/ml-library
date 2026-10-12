@@ -1,5 +1,5 @@
-#ifndef ARENA_H
-#define ARENA_H
+#ifndef MATRIX_H
+#define MATRIX_H
 
 #include "arena.h"
 #include "base.h"
@@ -32,4 +32,4 @@ b32 mat_softmax_add_grad(matrix *out, const matrix *softmax_out,
 b32 mat_cross_entropy_add_grad(matrix *p_grad, matrix *q_grad, const matrix *p,
                                const matrix *q, const matrix *grad);
 
-#endif /* ARENA_H */
+#endif /* MATRIX_H */
