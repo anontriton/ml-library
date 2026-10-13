@@ -12,17 +12,32 @@ MNIST and reaches **~93-94% test accuracy in about 15 seconds** on a laptop CPU.
 Requires a C11 compiler on macOS or Linux, and Python to fetch the dataset.
 
 ```sh
-# 1. download MNIST and convert it to .mat files (one-time)
+# 1. download MNIST and convert it to .mat files in data/ (one-time)
 python3 -m venv .venv && source .venv/bin/activate
 pip install numpy tensorflow-datasets
-python3 mnist.py
+python3 tools/mnist.py
 
 # 2. build and train
 make run
 ```
 
-Other targets: `make debug` builds with AddressSanitizer and UBSan,
-`make clean` removes build outputs.
+Run everything from the repo root, the example loads `data/*.mat` relative to
+it. Other targets: `make debug` / `make run-debug` build and run with
+AddressSanitizer and UBSan, `make clean` removes `build/`.
+
+## Layout
+
+```
+src/              the library, built into build/<release|debug>/libml.a
+  arena           memory arenas
+  prng            PCG random number generator
+  matrix          matrix ops and their backward passes
+  graph           autograd: nodes, topological sort, forward and backprop
+  model           wraps a graph's input/output/cost nodes and programs
+  train           mini-batch SGD with a test pass per epoch
+examples/mnist/   MNIST digit classifier, links against the library
+tools/mnist.py    downloads MNIST and writes data/*.mat
+```
 
 ## How it works
 
@@ -51,11 +66,11 @@ On top of that I added:
 - clock-based RNG seeding
 - redesign the core so that the graph only builds nodes, the model is given
   its input/output/cost nodes explicitly and training is its own layer
+- split the single `main.c` into separately compiled library modules
+  (`src/`, built as a static library) and an MNIST example (`examples/`)
 
 ## Roadmap
 
-- Split the single `main.c` into library modules (`src/`) and an MNIST
-   example (`examples/`).
 - Hardening: check every return value and allocation, an unbiased
    (Fisher-Yates) shuffle, an O(n) softmax backward pass, and a seed that
    can be passed on the command line for reproducible runs.

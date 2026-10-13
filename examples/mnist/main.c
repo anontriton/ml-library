@@ -37,25 +37,25 @@ int main(void) {
   /* mat_load returns NULL if a file is missing or has a bad header
    * early returns skip arena_destroy, the OS frees it when the process exits
    */
-  matrix *train_images = mat_load(perm_arena, "train_images.mat");
+  matrix *train_images = mat_load(perm_arena, "data/train_images.mat");
   if (train_images == NULL) {
-    fprintf(stderr, "failed to load train_images.mat (run mnist.py?)\n");
+    fprintf(stderr, "failed to load train_images.mat (run tools/mnist.py?)\n");
     return 1;
   }
-  matrix *test_images = mat_load(perm_arena, "test_images.mat");
+  matrix *test_images = mat_load(perm_arena, "data/test_images.mat");
   if (test_images == NULL) {
-    fprintf(stderr, "failed to load test_images.mat (run mnist.py?)\n");
+    fprintf(stderr, "failed to load test_images.mat (run tools/mnist.py?)\n");
     return 1;
   }
 
-  matrix *train_labels_file = mat_load(perm_arena, "train_labels.mat");
+  matrix *train_labels_file = mat_load(perm_arena, "data/train_labels.mat");
   if (train_labels_file == NULL) {
-    fprintf(stderr, "failed to load train_labels.mat (run mnist.py?)\n");
+    fprintf(stderr, "failed to load train_labels.mat (run tools/mnist.py?)\n");
     return 1;
   }
-  matrix *test_labels_file = mat_load(perm_arena, "test_labels.mat");
+  matrix *test_labels_file = mat_load(perm_arena, "data/test_labels.mat");
   if (test_labels_file == NULL) {
-    fprintf(stderr, "failed to load test_labels.mat (run mnist.py?)\n");
+    fprintf(stderr, "failed to load test_labels.mat (run tools/mnist.py?)\n");
     return 1;
   }
 

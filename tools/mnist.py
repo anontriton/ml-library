@@ -1,3 +1,4 @@
+import os
 import struct
 import tensorflow_datasets as tfds
 import numpy as np
@@ -40,10 +41,12 @@ test_images = test_images.reshape(len(test_images), -1)
 train_labels = train_labels.reshape(-1, 1)
 test_labels = test_labels.reshape(-1, 1)
 
-save_mat("train_images.mat", train_images)
-save_mat("train_labels.mat", train_labels)
-save_mat("test_images.mat", test_images)
-save_mat("test_labels.mat", test_labels)
+# run from the repo root, the C program loads data/*.mat relative to it
+os.makedirs("data", exist_ok=True)
+save_mat("data/train_images.mat", train_images)
+save_mat("data/train_labels.mat", train_labels)
+save_mat("data/test_images.mat", test_images)
+save_mat("data/test_labels.mat", test_labels)
 
 print(train_images.shape)
 print(train_labels.shape)

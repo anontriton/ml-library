@@ -1,12 +1,10 @@
 .venv/
 *.mat
 a.out
-main
 __pycache__/
 *.o
 *.swp
 
 data/
-main_debug
-*.dSYM/
 build/
+*.dSYM/
