@@ -360,19 +360,29 @@ b32 mat_relu_add_grad(matrix *out, const matrix *in, const matrix *grad) {
  * a full size x size matrix, the jacobian J[i][j] = s_i * (delta_ij - s_j)
  * (i == j) is the delta, 1 on the diagonal and 0 elsewhere
  * J is symmetric, so J^T * grad (what the chain rule wants) is just J * grad
- * only works on vectors, hence the rows/cols == 1 check
+ * only works on column vectors, hence the cols == 1 check
  * J is temporary, so it goes in a scratch arena and is freed on release
  */
 b32 mat_softmax_add_grad(matrix *out, const matrix *softmax_out,
                          const matrix *grad) {
-  if (softmax_out->rows != 1 && softmax_out->cols != 1) {
+  if (softmax_out->cols != 1) {
+    return false;
+  }
+  if (out->rows != softmax_out->rows || out->cols != softmax_out->cols) {
+    return false;
+  }
+  if (out->rows != grad->rows || out->cols != grad->cols) {
     return false;
   }
 
   mem_arena_temp scratch = arena_scratch_get(NULL, 0);
 
-  u32 size = MAX(softmax_out->rows, softmax_out->cols);
+  u32 size = softmax_out->rows;
   matrix *jacobian = mat_create(scratch.arena, size, size);
+  if (jacobian == NULL) {
+    arena_scratch_release(scratch);
+    return false;
+  }
 
   for (u32 i = 0; i < size; i++) {
     for (u32 j = 0; j < size; j++) {
@@ -381,11 +391,11 @@ b32 mat_softmax_add_grad(matrix *out, const matrix *softmax_out,
     }
   }
 
-  mat_mul(out, jacobian, grad, 0, 0, 0);
+  b32 ok = mat_mul(out, jacobian, grad, 0, 0, 0);
 
   arena_scratch_release(scratch);
 
-  return true;
+  return ok;
 }
 
 /* backprop through cross entropy L = p * -log(q), element by element
