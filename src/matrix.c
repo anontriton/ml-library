@@ -408,14 +408,19 @@ b32 mat_cross_entropy_add_grad(matrix *p_grad, matrix *q_grad, const matrix *p,
   if (p->rows != q->rows || p->cols != q->cols) {
     return false;
   }
+  if (grad->rows != p->rows || grad->cols != p->cols) {
+    return false;
+  }
+  if (p_grad != NULL && (p_grad->rows != p->rows || p_grad->cols != p->cols)) {
+    return false;
+  }
+  if (q_grad != NULL && (q_grad->rows != q->rows || q_grad->cols != q->cols)) {
+    return false;
+  }
 
   u64 size = (u64)p->rows * p->cols;
 
   if (p_grad != NULL) {
-    if (p_grad->rows != p->rows || p_grad->cols != p->cols) {
-      return false;
-    }
-
     for (u64 i = 0; i < size; i++) {
       f32 q_safe = MAX(q->data[i], CROSS_ENTROPY_EPS);
       p_grad->data[i] += -logf(q_safe) * grad->data[i];
@@ -423,10 +428,6 @@ b32 mat_cross_entropy_add_grad(matrix *p_grad, matrix *q_grad, const matrix *p,
   }
 
   if (q_grad != NULL) {
-    if (q_grad->rows != q->rows || q_grad->cols != q->cols) {
-      return false;
-    }
-
     /* same clamp as the forward pass, -p / 0 would be -inf, which turns
      * into NaN in the weights on the next update
      * when clamped, the grad is still big and points the right way (raise
