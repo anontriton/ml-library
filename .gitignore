@@ -8,3 +8,5 @@ __pycache__/
 data/
 build/
 *.dSYM/
+
+.DS_Store
