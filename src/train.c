@@ -99,14 +99,20 @@ b32 model_train(model_context *model,
   }
 
   for (u32 epoch = 0; epoch < training_desc->epochs; epoch++) {
-    /* num_examples random swaps, so each epoch sees a new order */
-    for (u32 i = 0; i < num_examples; i++) {
-      u32 a = prng_rand() % num_examples;
-      u32 b = prng_rand() % num_examples;
+    /* fisher-yates: walk from the back, swap each slot with a random slot
+     * at or before it, so every order is equally likely
+     * random swaps between any two slots don't do that, some orders come up
+     * more than others and ~13.5% of samples never move
+     * num_examples >= batch_size >= 1 (checked above), so - 1 can't wrap
+     * % (i + 1) is a tiny bit biased since 2^32 isn't a multiple of i + 1,
+     * at most ~i / 2^32, about 0.001% for mnist, not worth fixing
+     */
+    for (u32 i = num_examples - 1; i > 0; i--) {
+      u32 j = prng_rand() % (i + 1);
 
-      u32 tmp = training_order[b];
-      training_order[b] = training_order[a];
-      training_order[a] = tmp;
+      u32 tmp = training_order[i];
+      training_order[i] = training_order[j];
+      training_order[j] = tmp;
     }
 
     for (u32 batch = 0; batch < num_batches; batch++) {
