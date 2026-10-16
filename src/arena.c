@@ -65,11 +65,11 @@ void arena_destroy(mem_arena *arena) {
 
 void *arena_push(mem_arena *arena, u64 size, b32 non_zero) {
   u64 pos_aligned = ALIGN_UP_POW2(arena->pos, ARENA_ALIGN);
-  u64 new_pos = pos_aligned + size;
+  if (size > arena->reserve_size - pos_aligned) {
+      return NULL;
+    }
 
-  if (new_pos > arena->reserve_size) {
-    return NULL;
-  }
+  u64 new_pos = pos_aligned + size;
 
   if (new_pos > arena->commit_pos) {
     u64 new_commit_pos = new_pos;
@@ -146,8 +146,11 @@ mem_arena_temp arena_scratch_get(mem_arena **conflicts, u32 num_conflicts) {
   mem_arena **selected = &s_scratch_arenas[scratch_index];
 
   if (*selected == NULL) {
-    *selected = arena_create(MiB(64), MiB(1));
-  }
+      *selected = arena_create(MiB(64), MiB(1));
+      if (*selected == NULL) {
+        return (mem_arena_temp){0};
+      }
+    }
 
   return arena_temp_begin(*selected);
 }
