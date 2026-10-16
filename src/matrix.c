@@ -381,8 +381,12 @@ b32 mat_relu_add_grad(matrix *out, const matrix *in, const matrix *grad) {
  * a full size x size matrix, the jacobian J[i][j] = s_i * (delta_ij - s_j)
  * (i == j) is the delta, 1 on the diagonal and 0 elsewhere
  * J is symmetric, so J^T * grad (what the chain rule wants) is just J * grad
- * only works on column vectors, hence the cols == 1 check
- * J is temporary, so it goes in a scratch arena and is freed on release
+ * J never has to be built, row i of J * grad works out to
+ *   sum_j s_i * (delta_ij - s_j) * g_j = s_i * g_i - s_i * sum_j s_j * g_j
+ *                                      = s_i * (g_i - dot(s, g))
+ * so it's one pass for the dot product and one for the update, O(n) instead
+ * of an n x n matrix and an O(n^2) matmul
+ * only works on column vectors, hence the cols == 1 check (see mv_softmax)
  */
 b32 mat_softmax_add_grad(matrix *out, const matrix *softmax_out,
                          const matrix *grad) {
@@ -396,30 +400,18 @@ b32 mat_softmax_add_grad(matrix *out, const matrix *softmax_out,
     return false;
   }
 
-  mem_arena_temp scratch = arena_scratch_get(NULL, 0);
-  if (scratch.arena == NULL) {
-      return false;
-    }
-
   u32 size = softmax_out->rows;
-  matrix *jacobian = mat_create(scratch.arena, size, size);
-  if (jacobian == NULL) {
-    arena_scratch_release(scratch);
-    return false;
+
+  f32 dot = 0.0f;
+  for (u32 i = 0; i < size; i++) {
+    dot += softmax_out->data[i] * grad->data[i];
   }
 
   for (u32 i = 0; i < size; i++) {
-    for (u32 j = 0; j < size; j++) {
-      jacobian->data[j + i * size] =
-          softmax_out->data[i] * ((i == j) - softmax_out->data[j]);
-    }
+    out->data[i] += softmax_out->data[i] * (grad->data[i] - dot);
   }
 
-  b32 ok = mat_mul(out, jacobian, grad, 0, 0, 0);
-
-  arena_scratch_release(scratch);
-
-  return ok;
+  return true;
 }
 
 /* backprop through cross entropy L = p * -log(q), element by element

@@ -109,8 +109,9 @@ model_var *mv_relu(mem_arena *arena, model_graph *graph, model_var *input,
                        flags, MV_OP_RELU);
 }
 
-/* column vectors only, mat_softmax_add_grad can't do anything else, so
- * reject it here instead of failing in the middle of training
+/* column vectors only, mat_softmax treats the whole matrix as one
+ * distribution, which is never what a matrix input wants (attention needs a
+ * softmax per row), so reject it here instead of quietly doing the wrong math
  */
 model_var *mv_softmax(mem_arena *arena, model_graph *graph, model_var *input,
                       u32 flags) {
