@@ -152,7 +152,9 @@ int main(void) {
       .batch_size = 50,
       .learning_rate = 0.01f,
   };
-  model_train(model, &training_desc);
+  if (!model_train(model, &training_desc)) {
+    return 1;
+  }
 
   /* same image after training, the probability should pile up on its label */
   memcpy(model->input->val->data, test_images->data,

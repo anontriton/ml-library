@@ -25,7 +25,9 @@ typedef struct {
   f32 learning_rate;
 } model_training_desc;
 
-void model_train(model_context *model,
-                 const model_training_desc *training_desc);
+/* returns false (with the reason on stderr) if training_desc doesn't fit
+ * the model or scratch memory runs out, the model is untouched then
+ */
+b32 model_train(model_context *model, const model_training_desc *training_desc);
 
 #endif /* TRAIN_H */
