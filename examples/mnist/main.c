@@ -84,9 +84,14 @@ int main(void) {
   }
 
   matrix *train_labels =
-      mat_create(perm_arena, train_labels_file->rows, MNIST_NUM_CLASSES);
+    mat_create(perm_arena, train_labels_file->rows, MNIST_NUM_CLASSES);
   matrix *test_labels =
-      mat_create(perm_arena, test_labels_file->rows, MNIST_NUM_CLASSES);
+    mat_create(perm_arena, test_labels_file->rows, MNIST_NUM_CLASSES);
+
+  if (train_labels == NULL || test_labels == NULL) {
+    fprintf(stderr, "failed to allocate the one-hot label matrices\n");
+    return 1;
+  }
 
   /* the label is used as an index into the one-hot row, so a bad value would
    * write into the next sample's row or past the end of the array

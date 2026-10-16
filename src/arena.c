@@ -146,11 +146,11 @@ mem_arena_temp arena_scratch_get(mem_arena **conflicts, u32 num_conflicts) {
   mem_arena **selected = &s_scratch_arenas[scratch_index];
 
   if (*selected == NULL) {
-      *selected = arena_create(MiB(64), MiB(1));
-      if (*selected == NULL) {
-        return (mem_arena_temp){0};
-      }
+    *selected = arena_create(MiB(64), MiB(1));
+    if (*selected == NULL) {
+    return (mem_arena_temp){0};
     }
+  }
 
   return arena_temp_begin(*selected);
 }

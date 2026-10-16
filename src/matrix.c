@@ -28,15 +28,32 @@ typedef struct {
   u32 cols;
 } mat_file_header;
 
-/* the matrix lives in the caller's arena, there's no free, it goes away
- * when the arena is cleared
- */
 matrix *mat_create(mem_arena *arena, u32 rows, u32 cols) {
+  /* rows * cols fits in a u64, but 4 bytes per f32 can wrap it, and a
+   * wrapped size would push a tiny buffer for a huge matrix
+   */
+  u64 count = (u64)rows * cols;
+  if (count > UINT64_MAX / sizeof(f32)) {
+    return NULL;
+  }
+
+  /* if data doesn't fit, pop the struct too so a failed create leaves the
+   * arena how it was
+   */
+  mem_arena_temp undo = arena_temp_begin(arena);
+
   matrix *mat = PUSH_STRUCT(arena, matrix);
+  if (mat == NULL) {
+    return NULL;
+  }
 
   mat->rows = rows;
   mat->cols = cols;
-  mat->data = PUSH_ARRAY(arena, f32, (u64)rows * cols);
+  mat->data = PUSH_ARRAY(arena, f32, count);
+  if (mat->data == NULL) {
+    arena_temp_end(undo);
+    return NULL;
+  }
 
   return mat;
 }
@@ -64,6 +81,10 @@ matrix *mat_load(mem_arena *arena, const char *path) {
   }
 
   matrix *mat = mat_create(arena, header.rows, header.cols);
+  if (mat == NULL) {
+    fclose(f);
+    return NULL;
+  }
   u64 count = (u64)header.rows * header.cols;
   if (fread(mat->data, sizeof(f32), count, f) != count) {
     fclose(f);
@@ -376,6 +397,9 @@ b32 mat_softmax_add_grad(matrix *out, const matrix *softmax_out,
   }
 
   mem_arena_temp scratch = arena_scratch_get(NULL, 0);
+  if (scratch.arena == NULL) {
+      return false;
+    }
 
   u32 size = softmax_out->rows;
   matrix *jacobian = mat_create(scratch.arena, size, size);
