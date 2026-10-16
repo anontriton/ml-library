@@ -14,7 +14,9 @@
 model_context *model_create(mem_arena *arena, const model_desc *desc) {
   if (desc->graph == NULL || desc->input == NULL || desc->output == NULL ||
       desc->desired_output == NULL || desc->cost == NULL) {
-    fprintf(stderr, "model_create: graph and all four nodes must be set\n");
+    fprintf(stderr, "model_create: graph and all four nodes must be set (a "
+                    "NULL node means an mv_* call failed, bad shapes or out "
+                    "of memory)\n");
     return NULL;
   }
 
@@ -35,6 +37,10 @@ model_context *model_create(mem_arena *arena, const model_desc *desc) {
   }
 
   model_context *model = PUSH_STRUCT(arena, model_context);
+  if (model == NULL) {
+    fprintf(stderr, "model_create: out of memory\n");
+    return NULL;
+  }
 
   model->graph = desc->graph;
   model->input = desc->input;
@@ -45,6 +51,10 @@ model_context *model_create(mem_arena *arena, const model_desc *desc) {
   /* sorted once here so training doesn't redo the sort on every sample */
   model->forward_prog = model_prog_create(arena, desc->graph, desc->output);
   model->cost_prog = model_prog_create(arena, desc->graph, desc->cost);
+  if (model->forward_prog.vars == NULL || model->cost_prog.vars == NULL) {
+    fprintf(stderr, "model_create: out of memory building the programs\n");
+    return NULL;
+  }
 
   return model;
 }

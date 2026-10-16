@@ -9,25 +9,39 @@
 #include "base.h"
 #include "matrix.h"
 
+#include <stdlib.h>
+
 /* how many of inputs[] an op uses, relies on the op enum's grouping */
 #define MV_NUM_INPUTS(op)                                                      \
   ((op) < MV_OP_UNARY_START ? 0 : ((op) < MV_OP_BINARY_START ? 1 : 2))
 
 /* ids are handed out 0, 1, 2, ... in creation order
  * grad is only allocated when something needs it (saves memory on inputs)
+ * NULL if the arena is full, the id is only taken once everything fits
  */
 model_var *mv_create(mem_arena *arena, model_graph *graph, u32 rows, u32 cols,
                      u32 flags) {
   model_var *out = PUSH_STRUCT(arena, model_var);
+  if (out == NULL) {
+    return NULL;
+  }
 
-  out->index = graph->num_vars++;
   out->flags = flags;
   out->op = MV_OP_CREATE;
+
   out->val = mat_create(arena, rows, cols);
+  if (out->val == NULL) {
+    return NULL;
+  }
 
   if (flags & MV_FLAG_REQUIRES_GRAD) {
     out->grad = mat_create(arena, rows, cols);
+    if (out->grad == NULL) {
+      return NULL;
+    }
   }
+
+  out->index = graph->num_vars++;
 
   return out;
 }
@@ -44,6 +58,9 @@ static model_var *mv_unary_impl(mem_arena *arena, model_graph *graph,
   }
 
   model_var *out = mv_create(arena, graph, rows, cols, flags);
+  if (out == NULL) {
+    return NULL;
+  }
 
   out->op = op;
   out->inputs[0] = input;
@@ -64,6 +81,9 @@ static model_var *mv_binary_impl(mem_arena *arena, model_graph *graph,
   }
 
   model_var *out = mv_create(arena, graph, rows, cols, flags);
+  if (out == NULL) {
+    return NULL;
+  }
 
   out->op = op;
   out->inputs[0] = a;
@@ -75,21 +95,38 @@ static model_var *mv_binary_impl(mem_arena *arena, model_graph *graph,
 /* the mv_* op functions build the graph, they don't compute anything
  * each one checks shapes, works out the output shape, and adds a node
  * (NULL on a shape mismatch), the math runs later in model_prog_compute
+ * a NULL input gives a NULL output, so one failure anywhere ends up as a NULL
+ * output or cost, which model_create reports, the caller doesn't have to
+ * check every node
  */
 model_var *mv_relu(mem_arena *arena, model_graph *graph, model_var *input,
                    u32 flags) {
+  if (input == NULL) {
+    return NULL;
+  }
+
   return mv_unary_impl(arena, graph, input, input->val->rows, input->val->cols,
                        flags, MV_OP_RELU);
 }
 
+/* column vectors only, mat_softmax_add_grad can't do anything else, so
+ * reject it here instead of failing in the middle of training
+ */
 model_var *mv_softmax(mem_arena *arena, model_graph *graph, model_var *input,
                       u32 flags) {
+  if (input == NULL || input->val->cols != 1) {
+    return NULL;
+  }
+
   return mv_unary_impl(arena, graph, input, input->val->rows, input->val->cols,
                        flags, MV_OP_SOFTMAX);
 }
 
 model_var *mv_add(mem_arena *arena, model_graph *graph, model_var *a,
                   model_var *b, u32 flags) {
+  if (a == NULL || b == NULL) {
+    return NULL;
+  }
   if (a->val->rows != b->val->rows || a->val->cols != b->val->cols) {
     return NULL;
   }
@@ -100,6 +137,9 @@ model_var *mv_add(mem_arena *arena, model_graph *graph, model_var *a,
 
 model_var *mv_sub(mem_arena *arena, model_graph *graph, model_var *a,
                   model_var *b, u32 flags) {
+  if (a == NULL || b == NULL) {
+    return NULL;
+  }
   if (a->val->rows != b->val->rows || a->val->cols != b->val->cols) {
     return NULL;
   }
@@ -110,6 +150,9 @@ model_var *mv_sub(mem_arena *arena, model_graph *graph, model_var *a,
 
 model_var *mv_matmul(mem_arena *arena, model_graph *graph, model_var *a,
                      model_var *b, u32 flags) {
+  if (a == NULL || b == NULL) {
+    return NULL;
+  }
   /* (m x n) * (n x p) -> (m x p), inner dims must match */
   if (a->val->cols != b->val->rows) {
     return NULL;
@@ -124,6 +167,9 @@ model_var *mv_matmul(mem_arena *arena, model_graph *graph, model_var *a,
  */
 model_var *mv_cross_entropy(mem_arena *arena, model_graph *graph, model_var *p,
                             model_var *q, u32 flags) {
+  if (p == NULL || q == NULL) {
+    return NULL;
+  }
   if (p->val->rows != q->val->rows || p->val->cols != q->val->cols) {
     return NULL;
   }
@@ -139,6 +185,7 @@ model_var *mv_cross_entropy(mem_arena *arena, model_graph *graph, model_var *p,
  * - 2nd time it's popped: its inputs are all done, so append it to out
  * nodes out_var doesn't depend on are never reached, which is why the
  * forward program leaves out the label and cost nodes
+ * out of memory gives a program with vars == NULL
  */
 model_program model_prog_create(mem_arena *arena, model_graph *graph,
                                 model_var *out_var) {
@@ -146,6 +193,9 @@ model_program model_prog_create(mem_arena *arena, model_graph *graph,
    * pushed to, otherwise releasing scratch would pop prog.vars too
    */
   mem_arena_temp scratch = arena_scratch_get(&arena, 1);
+  if (scratch.arena == NULL) {
+    return (model_program){0};
+  }
 
   /* indexed by model_var.index, PUSH_ARRAY zeroes it so all start false */
   b8 *visited = PUSH_ARRAY(scratch.arena, b8, graph->num_vars);
@@ -155,6 +205,11 @@ model_program model_prog_create(mem_arena *arena, model_graph *graph,
   u32 out_size = 0;
   model_var **stack = PUSH_ARRAY(scratch.arena, model_var *, graph->num_vars);
   model_var **out = PUSH_ARRAY(scratch.arena, model_var *, graph->num_vars);
+
+  if (visited == NULL || stack == NULL || out == NULL) {
+    arena_scratch_release(scratch);
+    return (model_program){0};
+  }
 
   stack[stack_size++] = out_var;
 
@@ -214,11 +269,28 @@ model_program model_prog_create(mem_arena *arena, model_graph *graph,
   model_program prog = {.size = out_size,
                         .vars = PUSH_ARRAY_NZ(arena, model_var *, out_size)};
 
+  if (prog.vars == NULL) {
+    arena_scratch_release(scratch);
+    return (model_program){0};
+  }
+
   memcpy(prog.vars, out, sizeof(model_var *) * out_size);
 
   arena_scratch_release(scratch);
 
   return prog;
+}
+
+/* every shape in a program was checked when its nodes were built, so a mat_*
+ * op failing while it runs is a bug in this library, not something the
+ * caller could fix, stop right there and say which node instead of training
+ * on garbage
+ */
+static void check_op(b32 ok, const char *pass, const model_var *cur) {
+  if (!ok) {
+    fprintf(stderr, "%s: op %d on node %u failed\n", pass, cur->op, cur->index);
+    abort();
+  }
 }
 
 /* forward pass: run each node's op in order, writing into its val
@@ -244,27 +316,27 @@ void model_prog_compute(model_program *prog) {
       break;
 
     case MV_OP_RELU: {
-      mat_relu(cur->val, a->val);
+      check_op(mat_relu(cur->val, a->val), "forward", cur);
     } break;
     case MV_OP_SOFTMAX: {
-      mat_softmax(cur->val, a->val);
+      check_op(mat_softmax(cur->val, a->val), "forward", cur);
     } break;
 
     case MV_OP_BINARY_START:
       break;
 
     case MV_OP_ADD: {
-      mat_add(cur->val, a->val, b->val);
+      check_op(mat_add(cur->val, a->val, b->val), "forward", cur);
     } break;
     case MV_OP_SUB: {
-      mat_sub(cur->val, a->val, b->val);
+      check_op(mat_sub(cur->val, a->val, b->val), "forward", cur);
     } break;
     case MV_OP_MATMUL: {
       /* zero_out = 1, the forward pass overwrites val */
-      mat_mul(cur->val, a->val, b->val, 1, 0, 0);
+      check_op(mat_mul(cur->val, a->val, b->val, 1, 0, 0), "forward", cur);
     } break;
     case MV_OP_CROSS_ENTROPY: {
-      mat_cross_entropy(cur->val, a->val, b->val);
+      check_op(mat_cross_entropy(cur->val, a->val, b->val), "forward", cur);
     } break;
     }
   }
@@ -334,10 +406,11 @@ void model_prog_compute_grads(model_program *prog) {
       break;
 
     case MV_OP_RELU: {
-      mat_relu_add_grad(a->grad, a->val, cur->grad);
+      check_op(mat_relu_add_grad(a->grad, a->val, cur->grad), "backward", cur);
     } break;
     case MV_OP_SOFTMAX: {
-      mat_softmax_add_grad(a->grad, cur->val, cur->grad);
+      check_op(mat_softmax_add_grad(a->grad, cur->val, cur->grad), "backward",
+               cur);
     } break;
 
     case MV_OP_BINARY_START:
@@ -346,22 +419,22 @@ void model_prog_compute_grads(model_program *prog) {
     /* d(a + b)/da = d(a + b)/db = 1, grad passes through as is */
     case MV_OP_ADD: {
       if (a->flags & MV_FLAG_REQUIRES_GRAD) {
-        mat_add(a->grad, a->grad, cur->grad);
+        check_op(mat_add(a->grad, a->grad, cur->grad), "backward", cur);
       }
 
       if (b->flags & MV_FLAG_REQUIRES_GRAD) {
-        mat_add(b->grad, b->grad, cur->grad);
+        check_op(mat_add(b->grad, b->grad, cur->grad), "backward", cur);
       }
     } break;
 
     /* d(a - b)/da = 1, d(a - b)/db = -1, so b's grad is subtracted */
     case MV_OP_SUB: {
       if (a->flags & MV_FLAG_REQUIRES_GRAD) {
-        mat_add(a->grad, a->grad, cur->grad);
+        check_op(mat_add(a->grad, a->grad, cur->grad), "backward", cur);
       }
 
       if (b->flags & MV_FLAG_REQUIRES_GRAD) {
-        mat_sub(b->grad, b->grad, cur->grad);
+        check_op(mat_sub(b->grad, b->grad, cur->grad), "backward", cur);
       }
     } break;
 
@@ -371,11 +444,11 @@ void model_prog_compute_grads(model_program *prog) {
      */
     case MV_OP_MATMUL: {
       if (a->flags & MV_FLAG_REQUIRES_GRAD) {
-        mat_mul(a->grad, cur->grad, b->val, 0, 0, 1);
+        check_op(mat_mul(a->grad, cur->grad, b->val, 0, 0, 1), "backward", cur);
       }
 
       if (b->flags & MV_FLAG_REQUIRES_GRAD) {
-        mat_mul(b->grad, a->val, cur->grad, 0, 1, 0);
+        check_op(mat_mul(b->grad, a->val, cur->grad, 0, 1, 0), "backward", cur);
       }
     } break;
 
@@ -386,7 +459,9 @@ void model_prog_compute_grads(model_program *prog) {
       model_var *p = a;
       model_var *q = b;
 
-      mat_cross_entropy_add_grad(p->grad, q->grad, p->val, q->val, cur->grad);
+      check_op(mat_cross_entropy_add_grad(p->grad, q->grad, p->val, q->val,
+                                          cur->grad),
+               "backward", cur);
     } break;
     }
   }

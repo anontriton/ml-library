@@ -193,8 +193,9 @@ static void draw_mnist_digit(f32 *data) {
  * each layer is W * x + b, the hidden ones followed by a relu
  * shapes: W is (outputs x inputs) so W * x turns an (inputs x 1) column into
  * an (outputs x 1) column, b is (outputs x 1) to match
- * if a shape is wrong, mv_matmul/mv_add return NULL and nothing here checks,
- * so a crash right after changing these sizes is most likely a mismatch
+ * if a shape is wrong, mv_matmul/mv_add return NULL, the NULL carries through
+ * every op after it, and model_create reports it, only the weights need a
+ * check here since mat_fill_rand uses them directly
  */
 static model_context *create_mnist_model(mem_arena *arena, model_graph *graph) {
   model_var *input = mv_create(arena, graph, MNIST_IMG_SIZE, 1, 0);
@@ -205,6 +206,10 @@ static model_context *create_mnist_model(mem_arena *arena, model_graph *graph) {
                             MV_FLAG_REQUIRES_GRAD | MV_FLAG_PARAMETER);
   model_var *W2 = mv_create(arena, graph, MNIST_NUM_CLASSES, MNIST_HIDDEN_SIZE,
                             MV_FLAG_REQUIRES_GRAD | MV_FLAG_PARAMETER);
+  if (W0 == NULL || W1 == NULL || W2 == NULL) {
+    fprintf(stderr, "failed to create the weight matrices\n");
+    return NULL;
+  }
 
   /* xavier/glorot init: uniform in +-sqrt(6 / (fan_in + fan_out))
    * keeps each layer's outputs about the same size as its inputs, so values
