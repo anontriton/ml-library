@@ -29,11 +29,12 @@ all: release
 release: $(R)/mnist
 debug: $(D)/mnist
 
+# make run SEED=42 reproduces a run, leave it off for a clock seed
 run: $(R)/mnist
-	./$<
+	./$< $(SEED)
 
 run-debug: $(D)/mnist
-	./$<
+	./$< $(SEED)
 
 # compile step: one .c -> one .o, -c stops before linking
 $(R)/%.o: %.c

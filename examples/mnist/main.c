@@ -6,6 +6,8 @@
 #include "prng.h"
 #include "train.h"
 
+#include <errno.h>
+#include <stdlib.h>
 #include <time.h>
 
 #define MNIST_IMG_SIDE 28 /* each digit is a 28 x 28 pixel grayscale image */
@@ -15,15 +17,27 @@
 /* width of each hidden layer, a model choice, not a fact about mnist */
 #define MNIST_HIDDEN_SIZE 16
 
+static b32 parse_seed(const char *str, u64 *out);
 static void draw_mnist_digit(f32 *data);
 static model_context *create_mnist_model(mem_arena *arena, model_graph *graph);
 
-int main(void) {
-  /* seed the rng from the clock so each run starts from different weights
-   * the seed is printed for reference, but there's no way to pass it back
-   * in yet, so a run can't be reproduced
+int main(int argc, char **argv) {
+  /* usage: mnist [seed]
+   * with no seed the rng is seeded from the clock so each run starts from
+   * different weights, the seed is printed either way, so passing it back in
+   * reproduces a run exactly
    */
+  if (argc > 2) {
+    fprintf(stderr, "usage: %s [seed]\n", argv[0]);
+    return 1;
+  }
+
   u64 seed = (u64)time(NULL);
+  if (argc == 2 && !parse_seed(argv[1], &seed)) {
+    fprintf(stderr, "seed must be a whole number from 0 to %llu, got \"%s\"\n",
+            (unsigned long long)UINT64_MAX, argv[1]);
+    return 1;
+  }
   prng_seed(seed, 1);
   printf("seed: %llu\n", (unsigned long long)seed);
 
@@ -169,6 +183,26 @@ int main(void) {
   arena_destroy(perm_arena);
 
   return 0;
+}
+
+/* strtoull alone is too forgiving: it returns 0 for "abc", stops quietly at
+ * "42abc", clamps "99999999999999999999" to the max, and turns "-1" into
+ * 2^64 - 1, so each of those gets checked here
+ */
+static b32 parse_seed(const char *str, u64 *out) {
+  if (str[0] < '0' || str[0] > '9') {
+    return false;
+  }
+
+  char *end;
+  errno = 0;
+  unsigned long long val = strtoull(str, &end, 10);
+  if (errno == ERANGE || *end != '\0') {
+    return false;
+  }
+
+  *out = val;
+  return true;
 }
 
 /* prints one 28 x 28 image to the terminal, 2 spaces per pixel so it comes
