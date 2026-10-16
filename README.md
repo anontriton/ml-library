@@ -22,8 +22,10 @@ make run
 ```
 
 Run everything from the repo root, the example loads `data/*.mat` relative to
-it. Other targets: `make debug` / `make run-debug` build and run with
-AddressSanitizer and UBSan, `make clean` removes `build/`.
+it. Each run prints its seed, and `make run SEED=42` (or
+`./build/release/mnist 42`) reproduces a run exactly. Other targets:
+`make debug` / `make run-debug` build and run with AddressSanitizer and UBSan,
+`make clean` removes `build/`.
 
 ## Layout
 
@@ -63,17 +65,19 @@ On top of that I added:
 - a versioned binary file format (`MAT1` header) with shape validation
 - input validation for labels and dataset shapes
 - numerically stable softmax (max subtraction) and clamped cross-entropy
-- clock-based RNG seeding
+- RNG seeded from the clock or from the command line, so any run can be
+  reproduced from its printed seed
 - redesign the core so that the graph only builds nodes, the model is given
   its input/output/cost nodes explicitly and training is its own layer
 - split the single `main.c` into separately compiled library modules
   (`src/`, built as a static library) and an MNIST example (`examples/`)
+- hardening: every allocation and op result is checked (graph building
+  returns NULL up to a single error, a failing op while training aborts with
+  the node), overflow-safe arena pushes and `.mat` shapes, an unbiased
+  Fisher-Yates shuffle, and an O(n) softmax backward pass
 
 ## Roadmap
 
-- Hardening: check every return value and allocation, an unbiased
-   (Fisher-Yates) shuffle, an O(n) softmax backward pass, and a seed that
-   can be passed on the command line for reproducible runs.
 - Gradient-check tests for every op.
 - A character-level tokenizer.
 - Single-head causal self-attention, then a small transformer trained to
